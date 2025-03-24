@@ -17,9 +17,7 @@ use Volnix\CSRF\CSRF;
 
 $db = DB::getInstance(); 
 
-if (!defined('INDEX_AUTH')) {
-    die("cannot access this file directly");
-} elseif (INDEX_AUTH != 1) {
+if (!defined('INDEX_AUTH') || INDEX_AUTH != 1) {
     die("cannot access this file directly");
 }
 
@@ -31,30 +29,44 @@ if ($sysconf['baseurl'] != '') {
 do_checkIP('opac');
 do_checkIP('opac-member');
 
-// Ambil nilai limit dari form, default 100
+// Validasi dan casting limit
 $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 100;
+if ($limit < 1 || $limit > 1000) {
+    $limit = 100;
+}
 
-$query = "SELECT 
-            bt.biblio_id,
-            b.title, b.publish_year, 
-            t.topic,
-            a.author_name
-          FROM 
-            biblio_topic bt
-          JOIN 
-            biblio b ON bt.biblio_id = b.biblio_id
-          JOIN 
-            biblio_author ba ON b.biblio_id = ba.biblio_id
-          JOIN 
-            mst_author a ON ba.author_id = a.author_id
-          JOIN 
-            mst_topic t ON bt.topic_id = t.topic_id LIMIT $limit";
+// Validasi CSRF jika form dikirim
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['csrf_token'])) {
+    if (!CSRF::verify($_GET['csrf_token'])) {
+        die("Invalid CSRF token");
+    }
+}
 
-$result = $db->query($query);
+// Query aman dengan bindValue
+$stmt = $db->prepare("SELECT 
+                        bt.biblio_id,
+                        b.title, b.publish_year, 
+                        t.topic,
+                        a.author_name
+                      FROM 
+                        biblio_topic bt
+                      JOIN 
+                        biblio b ON bt.biblio_id = b.biblio_id
+                      JOIN 
+                        biblio_author ba ON b.biblio_id = ba.biblio_id
+                      JOIN 
+                        mst_author a ON ba.author_id = a.author_id
+                      JOIN 
+                        mst_topic t ON bt.topic_id = t.topic_id
+                      LIMIT :limit");
 
+$stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+$stmt->execute();
+$result = $stmt;
+
+// Lanjutkan pemrosesan data hasil query seperti sebelumnya...
 $nodes = [];
 $links = [];
-$topicData = [];
 $minYear = PHP_INT_MAX;
 $maxYear = 0;
 
@@ -102,6 +114,21 @@ $graphData = [
     'minYear' => $minYear,
     'maxYear' => $maxYear
 ];
+
+// Pastikan session aktif
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_start();
+}
+
+// Buat CSRF token jika belum ada
+if (empty($_SESSION['csrf_token'])) {
+    try {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    } catch (Exception $e) {
+        // Fallback jika random_bytes gagal
+        $_SESSION['csrf_token'] = md5(uniqid(mt_rand(), true));
+    }
+}
 
 
 ?>
@@ -216,11 +243,12 @@ Author URI: https://github.com/erwansetyobudi
 
 <div class="container"> 
   <?php include('graphbar.php'); ?> 
-  <br>
-  <form class="limit-form" onsubmit="updateGraph(event)">
+  
+  <form class="limit-form" method="get" onsubmit="updateGraph(event)">
+    <input type="hidden" name="p" value="author_network">
+    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token'], ENT_QUOTES, 'UTF-8'); ?>">
     <label for="limit">Limit Query:</label>
-    <input type="number" id="limit" name="limit" value="
-            <?php echo $limit; ?>" min="1">
+    <input type="number" id="limit" name="limit" value="<?php echo htmlspecialchars($limit, ENT_QUOTES, 'UTF-8'); ?>" min="1">
     <button type="submit">Update</button>
   </form>
   <div class="graph-box" id="graphBox">
@@ -310,82 +338,79 @@ Author URI: https://github.com/erwansetyobudi
             .on("start", dragstarted)
             .on("drag", dragged)
             .on("end", dragended));
-const minYear = graph.minYear;
-const maxYear = graph.maxYear;
+    const minYear = graph.minYear;
+    const maxYear = graph.maxYear;
 
-function getTopicColor(year) {
-    const colorScale = d3.scaleLinear()
-        .domain([minYear, maxYear])
-        .range(["#08306b", "#f6f91c"]); // warna gradasi kustom kamu
+    function getTopicColor(year) {
+        const colorScale = d3.scaleLinear()
+            .domain([minYear, maxYear])
+            .range(["#08306b", "#f6f91c"]); // warna gradasi kustom kamu
 
-    return colorScale(year || minYear);
+        return colorScale(year || minYear);
 
-}
-
-
-function getTopicRadius(count) {
-    return 10 + Math.sqrt(count) * 3; // Ukuran berdasarkan kemunculan
-}
-
-const tooltip = d3.select("#tooltip");
-
-node.each(function(d) {
-    const isTopic = d.group === "topic";
-    const selection = d3.select(this);
-    const size = isTopic ? getTopicRadius(d.count || 1) : 20;
-    const fill = isTopic ? getTopicColor(d.year || minYear) : getColorFromString(d.id);
-
-    if (isTopic) {
-        const hexagonPoints = [];
-        const sides = 6;
-        const angleStep = (2 * Math.PI) / sides;
-
-        for (let i = 0; i < sides; i++) {
-            const angle = angleStep * i;
-            const x = size * Math.cos(angle);
-            const y = size * Math.sin(angle);
-            hexagonPoints.push([x, y]);
-        }
-
-        selection.append("polygon")
-            .attr("points", hexagonPoints.map(p => p.join(",")).join(" "))
-            .attr("fill", fill)
-            .style("pointer-events", "all")
-            .on("mouseover", function(event) {
-                tooltip
-                    .style("display", "block")
-                    .html(`<strong>${d.id}</strong><br>Jumlah: ${d.count}<br>Tahun terakhir: ${d.year}`);
-            })
-            .on("mousemove", function(event) {
-                tooltip
-                    .style("left", (event.clientX + 10) + "px")
-                    .style("top", (event.clientY - 30) + "px");
-            })
-            .on("mouseout", function() {
-                tooltip.style("display", "none");
-            });
-    } else {
-        selection.append("circle")
-            .attr("r", size)
-            .attr("fill", fill)
-            .on("mouseover", function(event) {
-                tooltip
-                    .style("display", "block")
-                    .html(`<strong>${d.id}</strong>`);
-            })
-            .on("mousemove", function(event) {
-                tooltip
-                    .style("left", (event.clientX + 10) + "px")
-                    .style("top", (event.clientY - 30) + "px");
-            })
-            .on("mouseout", function() {
-                tooltip.style("display", "none");
-            });
     }
-});
 
 
+    function getTopicRadius(count) {
+        return 10 + Math.sqrt(count) * 3; // Ukuran berdasarkan kemunculan
+    }
 
+    const tooltip = d3.select("#tooltip");
+
+    node.each(function(d) {
+        const isTopic = d.group === "topic";
+        const selection = d3.select(this);
+        const size = isTopic ? getTopicRadius(d.count || 1) : 20;
+        const fill = isTopic ? getTopicColor(d.year || minYear) : getColorFromString(d.id);
+
+        if (isTopic) {
+            const hexagonPoints = [];
+            const sides = 6;
+            const angleStep = (2 * Math.PI) / sides;
+
+            for (let i = 0; i < sides; i++) {
+                const angle = angleStep * i;
+                const x = size * Math.cos(angle);
+                const y = size * Math.sin(angle);
+                hexagonPoints.push([x, y]);
+            }
+
+            selection.append("polygon")
+                .attr("points", hexagonPoints.map(p => p.join(",")).join(" "))
+                .attr("fill", fill)
+                .style("pointer-events", "all")
+                .on("mouseover", function(event) {
+                    tooltip
+                        .style("display", "block")
+                        .html(`<strong>${d.id}</strong><br>Jumlah: ${d.count}<br>Tahun terakhir: ${d.year}`);
+                })
+                .on("mousemove", function(event) {
+                    tooltip
+                        .style("left", (event.clientX + 10) + "px")
+                        .style("top", (event.clientY - 30) + "px");
+                })
+                .on("mouseout", function() {
+                    tooltip.style("display", "none");
+                });
+        } else {
+            selection.append("circle")
+                .attr("r", size)
+                .attr("fill", fill)
+                .on("mouseover", function(event) {
+                    tooltip
+                        .style("display", "block")
+                        .html(`<strong>${d.id}</strong>`);
+                })
+                .on("mousemove", function(event) {
+                    tooltip
+                        .style("left", (event.clientX + 10) + "px")
+                        .style("top", (event.clientY - 30) + "px");
+                })
+                .on("mouseout", function() {
+                    tooltip.style("display", "none");
+                });
+        }
+    });
 
 
     node.append("text")
@@ -420,7 +445,7 @@ node.each(function(d) {
     }
 
     // Fungsi untuk menyimpan sebagai JPG menggunakan html2canvas
-function saveAsImage() {
+    function saveAsImage() {
     let graphBox = document.getElementById("graphBox");
     
     // Simpan warna asli
@@ -440,7 +465,7 @@ function saveAsImage() {
         // Kembalikan warna asli setelah mengambil gambar
         graphBox.style.backgroundColor = originalBg;
     });
-}
+    }
 
 
     // Fungsi share URL tetap sama
@@ -459,7 +484,5 @@ function saveAsImage() {
     }
 </script>
 <script src="<?php echo SWB; ?>plugins/slims-graph/pages/jspdf.umd.min.js"></script>
-
-
 </body>
 </html>
