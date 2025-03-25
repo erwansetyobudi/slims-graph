@@ -204,6 +204,8 @@ Author URI: https://github.com/erwansetyobudi
             <form onsubmit="updateLimit(event)">
                 <label for="limit">Tampilkan Topik Teratas:</label>
                 <input type="number" id="limit" name="limit" value="<?php echo $limit; ?>" min="1">
+                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+
                 <button type="submit">Terapkan</button>
             </form>
 
