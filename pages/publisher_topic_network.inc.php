@@ -67,9 +67,14 @@ if ($publisherFilter !== '') {
     $query->execute();
 }
 
+$existingLinks = [];
 while ($row = $query->fetch(PDO::FETCH_ASSOC)) {
     $publisher = $row['publisher_name'];
     $topic = $row['topic'];
+    $key = "$publisher|$topic";
+
+    if (isset($existingLinks[$key])) continue;
+    $existingLinks[$key] = true;
 
     if (!isset($nodes[$publisher])) {
         $nodes[$publisher] = [
@@ -92,6 +97,7 @@ while ($row = $query->fetch(PDO::FETCH_ASSOC)) {
     ];
 }
 
+
 $graphData = [
     'nodes' => array_values($nodes),
     'links' => $links,
@@ -101,6 +107,13 @@ $graphData = [
 
 
 ?>
+<?php if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    try {
+        CSRF::validate();
+    } catch (\Exception $e) {
+        die("CSRF token mismatch");
+    }
+} ?>
 <!DOCTYPE html>
 <html lang="id">
 <head>
@@ -196,6 +209,7 @@ Author URI: https://github.com/erwansetyobudi
 <form class="limit-form" onsubmit="updateGraph(event)">
     <label for="limit">Limit Query:</label>
     <input type="number" id="limit" name="limit" value="<?php echo $limit; ?>" min="1">
+    <input type="hidden" name="csrf_token" value="<?php echo CSRF::getToken(); ?>">
 
     <label for="publisher_name">Cari Publisher:</label>
     <input type="text" id="publisher_name" name="publisher_name" value="<?php echo htmlspecialchars($publisherFilter); ?>">
