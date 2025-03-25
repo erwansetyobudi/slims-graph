@@ -10,6 +10,8 @@
  */
 
 header("Content-Type: text/html; charset=UTF-8");
+header("X-Frame-Options: DENY");
+
 
 use SLiMS\DB;
 
@@ -20,13 +22,15 @@ $db = DB::getInstance();
 $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 500;
 $topic_filter = isset($_GET['topic_filter']) ? trim($_GET['topic_filter']) : '';
 
-$query = "SELECT bt.biblio_id, b.publish_year, t.topic
+$query = $db->prepare("SELECT bt.biblio_id, b.publish_year, t.topic
           FROM biblio_topic bt
           JOIN biblio b ON bt.biblio_id = b.biblio_id
           JOIN mst_topic t ON bt.topic_id = t.topic_id
-          LIMIT $limit";
+          LIMIT :limit");
+$query->bindValue(':limit', $limit, PDO::PARAM_INT);
+$query->execute();
+$result = $query;
 
-$result = $db->query($query);
 
 $topicMap = [];
 $topicPairs = [];
